@@ -6,11 +6,10 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
 
 # ================= CONFIG =================
-TOKEN = os.getenv("BOT_TOKEN")  # Render env
-
+TOKEN = os.getenv("BOT_TOKEN")
 SEEN_FILE = "seen_receipts.json"
 
-# ================= LOAD SAVE =================
+# ================= LOAD / SAVE =================
 def load_seen():
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE, "r") as f:
@@ -24,7 +23,7 @@ def save_seen(data):
 SEEN_RECEIPTS = load_seen()
 
 # ================= RECEIPT KEY =================
-def extract_receipt_key(text: str) -> str:
+def extract_receipt_key(text):
     text_l = text.lower()
 
     amount = ""
@@ -48,7 +47,7 @@ def extract_receipt_key(text: str) -> str:
 def extract_ids(text):
     return re.findall(r"\d{5,}", text)
 
-# ================= PACKAGE DETECT =================
+# ================= PACKAGE =================
 def extract_package(text):
     packages = ["86", "172", "257", "344", "429", "514", "600"]
     for p in packages:
@@ -56,25 +55,22 @@ def extract_package(text):
             return p
     return ""
 
-# ================= FORMAT OUTPUT =================
+# ================= FORMAT =================
 def format_result(id_value, server_value, package_value):
     if package_value:
         return f".mlb {id_value}({server_value}) {package_value}"
     return f".mlb {id_value}({server_value})"
 
-# ================= COMMANDS =================
+# ================= COMMAND =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Bot Ready!")
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"📊 Seen receipts: {len(SEEN_RECEIPTS)}")
 
 async def clear_seen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     SEEN_RECEIPTS.clear()
     save_seen(SEEN_RECEIPTS)
     await update.message.reply_text("🧹 Cleared receipts")
 
-# ================= MAIN HANDLER =================
+# ================= MAIN =================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
 
@@ -88,7 +84,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
-    # ===== RECEIPT CHECK =====
+    # ===== receipt detect =====
     receipt_key = extract_receipt_key(text)
 
     if receipt_key != "__" and receipt_key in SEEN_RECEIPTS:
@@ -99,16 +95,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ===== SAVE RECEIPT =====
     if receipt_key != "__":
         SEEN_RECEIPTS[receipt_key] = int(time.time())
         save_seen(SEEN_RECEIPTS)
 
-    # ===== ID PROCESS =====
+    # ===== extract ids =====
     ids = extract_ids(text)
     if not ids:
         return
 
+    # ===== server =====
     server = "1"
     if "(" in text and ")" in text:
         try:
@@ -124,7 +120,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     final_text = "\n".join(results)
 
-    # ===== SEND COPY TEXT =====
     await message.reply_text(final_text)
 
 # ================= RUN =================
@@ -132,11 +127,8 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("clearseen", clear_seen))
-
     app.add_handler(MessageHandler(filters.ALL, handle_message))
 
     print("Bot running...")
     app.run_polling()
-            
