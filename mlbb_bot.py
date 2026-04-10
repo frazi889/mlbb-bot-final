@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -21,9 +22,9 @@ logging.basicConfig(
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", "10000"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://your-app.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-SEEN_FILE = "seen_orders.json"
+SEEN_FILE = "seen_receipts.json"
 DUPLICATE_TTL = 43200  # 12 hours
 
 ID_SERVER_PATTERNS = [
@@ -41,7 +42,7 @@ KEYWORDS = [
 ]
 
 
-def load_seen_orders() -> dict:
+def load_seen_receipts() -> dict:
     if not os.path.exists(SEEN_FILE):
         return {}
     try:
@@ -52,24 +53,30 @@ def load_seen_orders() -> dict:
         return {}
 
 
-def save_seen_orders(data: dict) -> None:
+def save_seen_receipts(data: dict) -> None:
     try:
         with open(SEEN_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        logging.warning("Could not save seen orders: %s", e)
+        logging.warning("Could not save seen receipts: %s", e)
 
 
-SEEN_ORDERS = load_seen_orders()
+SEEN_RECEIPTS = load_seen_receipts()
 
 
-def cleanup_seen_orders() -> None:
+def cleanup_seen_receipts() -> None:
     now = int(time.time())
-    expired = [k for k, ts in SEEN_ORDERS.items() if now - int(ts) > DUPLICATE_TTL]
+    expired = [k for k, ts in SEEN_RECEIPTS.items() if now - int(ts) > DUPLICATE_TTL]
     for k in expired:
-        SEEN_ORDERS.pop(k, None)
+        SEEN_RECEIPTS.pop(k, None)
     if expired:
-        save_seen_orders(SEEN_ORDERS)
+        save_seen_receipts(SEEN_RECEIPTS)
+
+
+def normalize_receipt_text(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
 
 
 def contains_keyword(text: str) -> bool:
@@ -138,14 +145,15 @@ def extract_name(message) -> str:
     return "Unknown User"
 
 
-def build_keyboard(id_value: str, server_value: str, package_value: Optional[str]) -> InlineKeyboardMarkup:
+def build_copy_text(id_value: str, server_value: str, package_value: Optional[str]) -> str:
     if package_value:
-        copy_text = f"{id_value}({server_value}){package_value}"
-    else:
-        copy_text = f"{id_value}({server_value})"
+        return f".mlb {id_value}({server_value}){package_value}"
+    return f".mlb {id_value}({server_value})"
 
+
+def build_keyboard(copy_text: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Copy", switch_inline_query_current_chat=copy_text)]
+        [InlineKeyboardButton("📋 Copy", callback_data=f"copy|{copy_text}")]
     ])
 
 
@@ -157,15 +165,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text(
-            f"Seen orders: {len(SEEN_ORDERS)}\nDuplicate TTL: {DUPLICATE_TTL} seconds"
+            f"Seen receipts: {len(SEEN_RECEIPTS)}\nDuplicate TTL: {DUPLICATE_TTL} seconds"
         )
 
 
 async def clear_seen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    SEEN_ORDERS.clear()
-    save_seen_orders(SEEN_ORDERS)
+    SEEN_RECEIPTS.clear()
+    save_seen_receipts(SEEN_RECEIPTS)
     if update.message:
         await update.message.reply_text("🧹 Duplicate list cleared")
+
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    await query.answer()
+
+    if query.data.startswith("copy|"):
+        copy_text = query.data.split("|", 1)[1]
+        await query.message.reply_text(copy_text)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -190,40 +210,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not contains_keyword(text):
         return
 
-    cleanup_seen_orders()
+    cleanup_seen_receipts()
 
     id_value, server_value = result
     package_value = extract_package(text)
     buyer_name = extract_name(message)
 
-    if package_value:
-        order_key = f"{id_value}({server_value}) {package_value}".lower()
-    else:
-        order_key = f"{id_value}({server_value})".lower()
+    # duplicate = same receipt text only
+    receipt_key = normalize_receipt_text(text)
 
     now = int(time.time())
-    last_seen = SEEN_ORDERS.get(order_key)
+    last_seen = SEEN_RECEIPTS.get(receipt_key)
 
     if last_seen and (now - int(last_seen) <= DUPLICATE_TTL):
-        if package_value:
-            alert_text = f"⚠️ Duplicate Receipt\n{buyer_name}\n{id_value}({server_value}){package_value}"
-        else:
-            alert_text = f"⚠️ Duplicate Receipt\n{buyer_name}\n{id_value}({server_value})"
-
-        await message.reply_text(alert_text)
+        await message.reply_text("ဒီပြေစာအရင်ပို့ဖူးပါတယ် ငွေပြန်စစ်ပါ")
         return
 
-    SEEN_ORDERS[order_key] = now
-    save_seen_orders(SEEN_ORDERS)
+    SEEN_RECEIPTS[receipt_key] = now
+    save_seen_receipts(SEEN_RECEIPTS)
 
-    if package_value:
-        output = f"{buyer_name}\n{id_value}({server_value}){package_value}"
-    else:
-        output = f"{buyer_name}\n{id_value}({server_value})"
+    copy_text = build_copy_text(id_value, server_value, package_value)
+    output = f"{buyer_name}\n{copy_text}"
 
     await message.reply_text(
         output,
-        reply_markup=build_keyboard(id_value, server_value, package_value),
+        reply_markup=build_keyboard(copy_text),
     )
 
 
@@ -238,6 +249,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("clearseen", clear_seen))
+    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(
         MessageHandler(
             (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
