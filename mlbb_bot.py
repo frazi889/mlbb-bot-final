@@ -20,6 +20,8 @@ logging.basicConfig(
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+PORT = int(os.getenv("PORT", "10000"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://your-app.onrender.com
 
 SEEN_FILE = "seen_orders.json"
 DUPLICATE_TTL = 43200  # 12 hours
@@ -148,19 +150,22 @@ def build_keyboard(id_value: str, server_value: str, package_value: Optional[str
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ MLBB Copy Bot Ready")
+    if update.message:
+        await update.message.reply_text("✅ MLBB Copy Bot Ready")
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"Seen orders: {len(SEEN_ORDERS)}\nDuplicate TTL: {DUPLICATE_TTL} seconds"
-    )
+    if update.message:
+        await update.message.reply_text(
+            f"Seen orders: {len(SEEN_ORDERS)}\nDuplicate TTL: {DUPLICATE_TTL} seconds"
+        )
 
 
 async def clear_seen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     SEEN_ORDERS.clear()
     save_seen_orders(SEEN_ORDERS)
-    await update.message.reply_text("🧹 Duplicate list cleared")
+    if update.message:
+        await update.message.reply_text("🧹 Duplicate list cleared")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -180,6 +185,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     result = extract_id_server(text)
     if not result:
+        return
+
+    if not contains_keyword(text):
         return
 
     cleanup_seen_orders()
@@ -205,9 +213,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(alert_text)
         return
 
-    if not contains_keyword(text):
-        return
-
     SEEN_ORDERS[order_key] = now
     save_seen_orders(SEEN_ORDERS)
 
@@ -225,16 +230,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is missing")
+    if not WEBHOOK_URL:
+        raise RuntimeError("WEBHOOK_URL is missing")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("clearseen", clear_seen))
-    app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_message))
+    app.add_handler(
+        MessageHandler(
+            (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
+            handle_message,
+        )
+    )
 
-    print("Bot running...")
-    app.run_polling()
+    print("Bot running with webhook...")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=WEBHOOK_URL,
+        allowed_updates=Update.ALL_TYPES,
+    )
 
 
 if __name__ == "__main__":
