@@ -165,6 +165,29 @@ def build_keyboard(copy_text: str) -> InlineKeyboardMarkup:
         ]
     ])
 
+def extract_receipt_key(text: str) -> str:
+    text_l = text.lower()
+
+    amount = ""
+    m_amount = re.search(r"(-?\d[\d,\.]+)\s*ks", text_l)
+    if m_amount:
+        amount = m_amount.group(1)
+
+    txid = ""
+    m_tx = re.search(r"\b\d{10,}\b", text_l)
+    if m_tx:
+        txid = m_tx.group(0)
+
+    date = ""
+    m_date = re.search(r"\d{2}[./-]\d{2}[./-]\d{4}", text_l)
+    if m_date:
+        date = m_date.group(0)
+
+    return f"{amount}_{txid}_{date}"
+
+def build_receipt_key(message, raw_text: str):
+    ...
+
 
 def build_receipt_key(message, raw_text: str) -> str:
     """
@@ -231,7 +254,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     package_value = extract_package(text)
     buyer_name = extract_name(message)
 
-    receipt_key = build_receipt_key(message, text)
+    receipt_key = extract_receipt_key(text)
 
     now = int(time.time())
     last_seen = SEEN_RECEIPTS.get(receipt_key)
