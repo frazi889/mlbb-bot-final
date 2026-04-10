@@ -5,19 +5,8 @@ import re
 import time
 from typing import Optional, Tuple
 
-from telegram import (
-    CopyTextButton,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update,
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -26,7 +15,8 @@ logging.basicConfig(
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", "10000"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+BASE_WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
+WEBHOOK_PATH = "telegram-webhook"
 
 SEEN_FILE = "seen_receipts.json"
 DUPLICATE_TTL = 43200  # 12 hours
@@ -141,9 +131,7 @@ def extract_name(message) -> str:
     if user:
         if user.username:
             return f"@{user.username}"
-        full_name = " ".join(
-            part for part in [user.first_name, user.last_name] if part
-        ).strip()
+        full_name = " ".join(part for part in [user.first_name, user.last_name] if part).strip()
         if full_name:
             return full_name
     return "Unknown User"
@@ -156,55 +144,28 @@ def build_copy_text(id_value: str, server_value: str, package_value: Optional[st
 
 
 def build_keyboard(copy_text: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                text="📋 Copy",
-                copy_text=CopyTextButton(copy_text)
-            )
-        ]
-    ])
-
-def extract_receipt_key(text: str) -> str:
-    text_l = text.lower()
-
-    amount = ""
-    m_amount = re.search(r"(-?\d[\d,\.]+)\s*ks", text_l)
-    if m_amount:
-        amount = m_amount.group(1)
-
-    txid = ""
-    m_tx = re.search(r"\b\d{10,}\b", text_l)
-    if m_tx:
-        txid = m_tx.group(0)
-
-    date = ""
-    m_date = re.search(r"\d{2}[./-]\d{2}[./-]\d{4}", text_l)
-    if m_date:
-        date = m_date.group(0)
-
-    return f"{amount}_{txid}_{date}"
-
-def build_receipt_key(message, raw_text: str):
-    ...
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(text="📋 Copy", copy_text=CopyTextButton(copy_text))]]
+    )
 
 
 def build_receipt_key(message, raw_text: str) -> str:
     """
     Duplicate = same receipt only
-    Priority:
-    1) Same photo/document file => duplicate
-    2) Same caption/text only => duplicate
+    - same photo/image file + same caption/text
+    - or same plain text/caption message
     """
+    text_key = normalize_text(raw_text)
+
     if getattr(message, "photo", None):
-        # largest size photo
-        photo = message.photo[-1]
-        return f"photo:{photo.file_unique_id}"
+        return f"photo:{message.photo[-1].file_unique_id}|text:{text_key}"
 
-    if getattr(message, "document", None) and getattr(message.document, "mime_type", "").startswith("image/"):
-        return f"docimg:{message.document.file_unique_id}"
+    if getattr(message, "document", None):
+        mime = getattr(message.document, "mime_type", "") or ""
+        if mime.startswith("image/"):
+            return f"docimg:{message.document.file_unique_id}|text:{text_key}"
 
-    return f"text:{normalize_text(raw_text)}"
+    return f"text:{text_key}"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -254,12 +215,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     package_value = extract_package(text)
     buyer_name = extract_name(message)
 
-    if message.photo:
-    photo_key = message.photo[-1].file_unique_id
-    text_key = extract_receipt_key(text)
-    receipt_key = f"photo:{photo_key}|text:{text_key}"
-else:
-    receipt_key = extract_receipt_key(text)
+    receipt_key = build_receipt_key(message, text)
 
     now = int(time.time())
     last_seen = SEEN_RECEIPTS.get(receipt_key)
@@ -283,7 +239,7 @@ else:
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is missing")
-    if not WEBHOOK_URL:
+    if not BASE_WEBHOOK_URL:
         raise RuntimeError("WEBHOOK_URL is missing")
 
     app = Application.builder().token(BOT_TOKEN).build()
@@ -299,11 +255,14 @@ def main():
         )
     )
 
+    full_webhook_url = f"{BASE_WEBHOOK_URL}/{WEBHOOK_PATH}"
+
     print("Bot running with webhook...")
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url=WEBHOOK_URL,
+        url_path=WEBHOOK_PATH,
+        webhook_url=full_webhook_url,
         allowed_updates=Update.ALL_TYPES,
     )
 
