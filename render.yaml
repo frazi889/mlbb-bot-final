@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: mlbb-bot-final
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python mlbb_bot.py
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
