@@ -1,4 +1,3 @@
-import io
 import json
 import logging
 import os
@@ -6,7 +5,6 @@ import re
 import time
 from typing import Optional, Tuple
 
-from PIL import Image
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -151,37 +149,21 @@ def build_keyboard(copy_text: str) -> InlineKeyboardMarkup:
     )
 
 
-def dhash_from_bytes(data: bytes) -> str:
-    img = Image.open(io.BytesIO(data)).convert("L").resize((9, 8))
-    pixels = list(img.getdata())
-
-    diff_bits = []
-    for row in range(8):
-        row_start = row * 9
-        for col in range(8):
-            left_px = pixels[row_start + col]
-            right_px = pixels[row_start + col + 1]
-            diff_bits.append("1" if left_px > right_px else "0")
-
-    return f"{int(''.join(diff_bits), 2):016x}"
-
-
-async def build_receipt_key(message, raw_text: str) -> str:
+def build_receipt_key(message, raw_text: str) -> str:
+    """
+    Duplicate = same receipt only
+    - same photo/image file + same caption/text
+    - or same plain text/caption message
+    """
     text_key = normalize_text(raw_text)
 
     if getattr(message, "photo", None):
-        telegram_file = await message.photo[-1].get_file()
-        data = await telegram_file.download_as_bytearray()
-        image_hash = dhash_from_bytes(bytes(data))
-        return f"img:{image_hash}|text:{text_key}"
+        return f"photo:{message.photo[-1].file_unique_id}|text:{text_key}"
 
     if getattr(message, "document", None):
         mime = getattr(message.document, "mime_type", "") or ""
         if mime.startswith("image/"):
-            telegram_file = await message.document.get_file()
-            data = await telegram_file.download_as_bytearray()
-            image_hash = dhash_from_bytes(bytes(data))
-            return f"img:{image_hash}|text:{text_key}"
+            return f"docimg:{message.document.file_unique_id}|text:{text_key}"
 
     return f"text:{text_key}"
 
@@ -233,7 +215,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     package_value = extract_package(text)
     buyer_name = extract_name(message)
 
-    receipt_key = await build_receipt_key(message, text)
+    receipt_key = build_receipt_key(message, text)
 
     now = int(time.time())
     last_seen = SEEN_RECEIPTS.get(receipt_key)
