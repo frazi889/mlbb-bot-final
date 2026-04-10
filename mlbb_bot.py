@@ -5,10 +5,14 @@ import re
 import time
 from typing import Optional, Tuple
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    CopyTextButton,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.ext import (
     Application,
-    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -73,7 +77,7 @@ def cleanup_seen_receipts() -> None:
         save_seen_receipts(SEEN_RECEIPTS)
 
 
-def normalize_receipt_text(text: str) -> str:
+def normalize_text(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"\s+", " ", text)
     return text
@@ -153,8 +157,31 @@ def build_copy_text(id_value: str, server_value: str, package_value: Optional[st
 
 def build_keyboard(copy_text: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Copy", callback_data=f"copy|{copy_text}")]
+        [
+            InlineKeyboardButton(
+                text="📋 Copy",
+                copy_text=CopyTextButton(copy_text)
+            )
+        ]
     ])
+
+
+def build_receipt_key(message, raw_text: str) -> str:
+    """
+    Duplicate = same receipt only
+    Priority:
+    1) Same photo/document file => duplicate
+    2) Same caption/text only => duplicate
+    """
+    if getattr(message, "photo", None):
+        # largest size photo
+        photo = message.photo[-1]
+        return f"photo:{photo.file_unique_id}"
+
+    if getattr(message, "document", None) and getattr(message.document, "mime_type", "").startswith("image/"):
+        return f"docimg:{message.document.file_unique_id}"
+
+    return f"text:{normalize_text(raw_text)}"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -174,18 +201,6 @@ async def clear_seen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_seen_receipts(SEEN_RECEIPTS)
     if update.message:
         await update.message.reply_text("🧹 Duplicate list cleared")
-
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if not query or not query.data:
-        return
-
-    await query.answer()
-
-    if query.data.startswith("copy|"):
-        copy_text = query.data.split("|", 1)[1]
-        await query.message.reply_text(copy_text)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,8 +231,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     package_value = extract_package(text)
     buyer_name = extract_name(message)
 
-    # duplicate = same receipt text only
-    receipt_key = normalize_receipt_text(text)
+    receipt_key = build_receipt_key(message, text)
 
     now = int(time.time())
     last_seen = SEEN_RECEIPTS.get(receipt_key)
@@ -249,10 +263,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("clearseen", clear_seen))
-    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(
         MessageHandler(
-            (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
+            (filters.TEXT | filters.CAPTION | filters.PHOTO | filters.Document.IMAGE)
+            & ~filters.COMMAND,
             handle_message,
         )
     )
