@@ -254,6 +254,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     package_value = extract_package(text)
     buyer_name = extract_name(message)
 
+    if message.photo:
+    photo_key = message.photo[-1].file_unique_id
+    text_key = extract_receipt_key(text)
+    receipt_key = f"photo:{photo_key}|text:{text_key}"
+else:
     receipt_key = extract_receipt_key(text)
 
     now = int(time.time())
